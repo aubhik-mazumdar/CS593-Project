@@ -38,14 +38,82 @@ proc princomp data=diabetes_z out=diabetes_z_pca;
 	var skinthickness insulin bmi diabetespedigreefunction age pregnancies glucose bloodpressure;
 run;
 quit;
+/******************************
+* ADD IDs to dataset for ease *
+******************************/
+data diabetes;
+	set diabetes;
+	id = _n_;
+run;
+
+data diabeteslevinf;
+	set diabetes;
+run;
+
+/***********************
+* LINEAR REGRESSION TO *
+* CALCULATE	THE DPF	   *
+* NOT POSSIBLE AS      *
+* MSE=0.1025(too high) *		
+***********************/
+
+proc reg data=diabetes OUTEST=test1;
+	model diabetespedigreefunction= skinthickness insulin bmi age pregnancies glucose bloodpressure outcome /STB SELECTION=STEPWISE STB vif; 
+	OUTPUT h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
+         ; 
+run;
+quit;
+/**********************************
+* IMPORT DATASET WITH 10 LEVERAGE *
+*  AND INFLUENCE POINTS REMOVED   *
+**********************************/
+PROC IMPORT OUT= WORK.diabeteslevinf DATAFILE= "C:\Users\Aubhik\Desktop\MS\spring2018\CS 593 - Data Mining 2\finalProject\dblevinf.csv" 
+            DBMS=CSV REPLACE;
+     		GETNAMES=YES;
+     		DATAROW=2; 
+RUN;
+/*****************************
+*	NULL HYPOTHESIS TESTS    *
+*****************************/
+proc sql;
+	create table correct as
+	select count(*) as correct from
+	diabeteslevinf where outcome=1;
+	create table total_obs as
+	select count(*) as denom from
+	diabeteslevinf;
+	create table null1 as
+	select a.correct * 100/b.denom as accuracy
+	from correct a, total_obs b;
+quit;
+proc sql;
+	create table correct as
+	select count(*) as correct from
+	Predictions where outcome=0;
+	create table total_obs as
+	select count(*) as denom from
+	predictions;
+	create table null0 as
+	select a.correct * 100/b.denom as accuracy
+	from correct a, total_obs b;
+quit;
+
+*_______MODEL1____________________;
 /**********************************
 * RUN LINEAR REGRESSION      	  *
 * USING ONLY ORIGINAL VARIABLES   *
-* ACCURACY = 77.083%			  *
 **********************************/
-proc reg data=diabetes OUTEST=test;
-	model outcome=  skinthickness insulin bmi diabetespedigreefunction age pregnancies glucose bloodpressure / SELECTION=STEPWISE vif; 
-	OUTPUT h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
+proc reg data=diabeteslevinf OUTEST=test;
+	model outcome=  skinthickness insulin bmi diabetespedigreefunction age pregnancies glucose bloodpressure / STB SELECTION=STEPWISE vif; 
+	OUTPUT OUT=modeldata h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
+         ; 
+run;
+quit;
+*Remove age as it is not significant;
+
+proc reg data=diabeteslevinf OUTEST=test;
+	model outcome=  skinthickness insulin bmi diabetespedigreefunction age pregnancies glucose bloodpressure / STB SELECTION=STEPWISE vif; 
+	OUTPUT OUT=modeldata h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
          ; 
 run;
 quit;
@@ -53,33 +121,81 @@ quit;
 * USE SCORE TO FIND PREDICTED CONTINUOUS *
 * VALUES FOR OUTCOME                     *
 *****************************************/ 
-proc score data=diabetes score=test out=RScoreP type=parms;
-   var bmi diabetespedigreefunction age pregnancies glucose bloodpressure;
+proc score data=diabeteslevinf score=test out=RScoreP type=parms;
+   var glucose bmi pregnancies diabetespedigreefunction bloodpressure age;
 run;
 /******************************************
-* 	USE 0.4 AS THRESHOLD TO SET OUTCOME   *
+* 	USE 0.6 AS THRESHOLD TO SET OUTCOME   *
 *	TO 0 or 1							  *
 ******************************************/
 data Predictions;
 	set Rscorep;
-	if model1>0.4 then prediction=1;
+	outcome = outcome;
+	if model1>=0.6 then prediction=1;
 	else prediction=0;
 run;
 
+/**************************************************************************
+*CALCULATE SCORE USING ACCURACY CALCULATOR (below) => ACCURACY = 78.133%  *
+**************************************************************************/
+*------------------------------------------------------------------------;
+*_________MODEL2__________________;	
 /**********************************
 * RUN LINEAR REGRESSION      	  *
-* USING ONLY PRINCIPAL 			  *
-* COMPONENTS THAT ARE SIGNIFICANT *
-* ACCURACY = 75.911%			  *
+* USING ALL PRINCIPAL 			  *
+* COMPONENTS  					  *
 **********************************/
 proc reg data=diabetes_z_pca OUTEST=test;
-	model outcome= prin1 prin2 prin3 prin5 prin6 /vif; 
+	model outcome= prin1--prin8 /STB SELECTION=stepwise; 
 	OUTPUT h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
          ; 
 run;
 quit;
 
 
+/*****************************************
+* USE SCORE TO FIND PREDICTED CONTINUOUS *
+* VALUES FOR OUTCOME                     *
+*****************************************/ 
+proc score data=diabetes_z_pca score=test out=RScoreP type=parms;
+   var prin1 prin2 prin3 prin5 prin6 prin8;
+run;
+/******************************************
+* 	USE 0.6 AS THRESHOLD TO SET OUTCOME   *
+*	TO 0 or 1							  *
+******************************************/
+data Predictions;
+	set Rscorep;
+	outcome = outcome;
+	if model1>=0.6 then prediction=1;
+	else prediction=0;
+run;
+/*************************************************************************
+*CALCULATE SCORE USING ACCURACY CALCULATOR (below) => ACCURACY = 76.562% *
+*************************************************************************/ 
+*------------------------------------------------------------------------;
+*__________MODEL3_______________________;
+/****************************************
+* RUN LINEAR REGRESSION          		*
+* USING EXTRACTED PRINCIPAL COMPONENTS 	*
+* AND STEPWISE SELECTION		 		*		
+* ACCURACY = 75.911%			 		*
+****************************************/
+proc reg data=diabetes_z_pca OUTEST=test;
+	model outcome= prin1--prin6 /STB;
+	OUTPUT h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
+         ; 
+run;
+quit;
+
+
+*REMOVE PRIN4 BECAUSE IT IS NOT SIGNIFICANT;
+proc reg data=diabetes_z_pca OUTEST=test;
+	model outcome= prin1 prin2 prin3 prin5 prin6; 
+	OUTPUT h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
+         ; 
+run;
+quit;
 /*****************************************
 * USE SCORE TO FIND PREDICTED CONTINUOUS *
 * VALUES FOR OUTCOME                     *
@@ -88,68 +204,34 @@ proc score data=diabetes_z_pca score=test out=RScoreP type=parms;
    var prin1 prin2 prin3 prin5 prin6;
 run;
 /******************************************
-* 	USE 0.4 AS THRESHOLD TO SET OUTCOME   *
+* 	USE 0.6 AS THRESHOLD TO SET OUTCOME   *
 *	TO 0 or 1							  *
 ******************************************/
 data Predictions;
 	set Rscorep;
-	if model1>0.4 then prediction=1;
+	outcome = outcome;
+	if model1>=0.6 then prediction=1;
 	else prediction=0;
 run;
+/*************************************************************************
+*CALCULATE SCORE USING ACCURACY CALCULATOR (below) => ACCURACY = 76.041% *
+*************************************************************************/
+*------------------------------------------------------------------------;
 
-/**************************
-* RUN PYTHON TO CALCULATE *
-* ACCURACY				  *
-**************************/
-/*_______________________________________________________________________________________________________________________*/
-/*********************************
-* RUN LINEAR REGRESSION          *
-* USING ALL PRINCIPAL COMPONENTS *
-* AND STEPWISE SELECTION		 *
-* ACCURACY = 76.432%			 *
-*********************************/
-proc reg data=diabetes_z_pca OUTEST=test;
-	model outcome= prin1--prin8 /SELECTION=STEPWISE vif; 
-	OUTPUT h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
-         ; 
-run;
+/****************************
+* 	ACCURACY CALCULATOR     *
+****************************/
+proc sql;
+	create table correct as
+	select count(*) as correct from
+	Predictions where outcome=prediction;
+	create table total_obs as
+	select count(*) as denom from
+	predictions;
+	create table accuracy as
+	select a.correct * 100/b.denom as accuracy
+	from correct a, total_obs b;
 quit;
-
-/*****************************************
-* USE SCORE TO FIND PREDICTED CONTINUOUS *
-* VALUES FOR OUTCOME                     *
-*****************************************/ 
-proc score data=diabetes_z_pca score=test out=RScoreP type=parms;
-   var prin1--prin8;
-run;
-
-/***********************
-* LINEAR REGRESSION TO *
-* CALCULATE	THE DPF	   *		
-***********************/
-proc standard data=diabetes mean=0 std=1 out=diabetes_z1;
-	var pregnancies glucose bloodpressure skinthickness insulin bmi age outcome;
-run;
-
-proc princomp data=diabetes_z1 out=diabetes_z_pca1; *plots=all;
-	var skinthickness insulin bmi age pregnancies glucose bloodpressure outcome;
-run;
-quit;
-
-proc reg data=diabetes_z_pca1 OUTEST=test1;
-	model diabetespedigreefunction= prin1 prin2 prin3 prin5 prin6 prin7 prin8 /SELECTION=STEPWISE vif; 
-	OUTPUT h=lev cookd=Cookd  dffits=dffit L95M=C_l95m  U95M=C_u95m  L95=C_l95 U95=C_u95
-         ; 
-run;
-quit;
-
-proc score data=diabetes_z_pca1 score=test1 out=RScoreP2 type=parms;
-   var prin1 prin2 prin3 prin7;
-run;
-/**************************
-* RUN PYTHON TO CALCULATE *
-* RMSError				  *
-**************************/
 
 /*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
 
@@ -158,14 +240,14 @@ run;
 ***********************/
 
 /**********************
-* TEST1: No change    *
+* MODEL1: No change   *
 **********************/
 
 proc logistic data=diabetes descending;
 	model outcome=pregnancies glucose bloodpressure skinthickness insulin bmi DiabetesPedigreefunction age;
 quit;
 /**********************
-* TEST2: +V_insulin    *
+* TEST2: +V_insulin   *
 **********************/
 data diabetes2;
 	set diabetes;
@@ -224,7 +306,3 @@ proc logistic data=diabetes2 desc;
 run;
 quit;
 ods graphics off;
-class V_bmi(ref='0') V_insulin(ref='0')/param=ref;
-if bmi<=20 then V_bmi=1;
-	else if bmi>20 and bmi<=30 then V_bmi=2;
-	else V_bmi=3;
